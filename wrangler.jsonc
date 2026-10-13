@@ -3,7 +3,7 @@
   "main": "worker.mjs",
   "compatibility_date": "2025-01-01",
   "vars": {
-    "ALLOWED_ORIGINS": "https://g2ppoint.web.app/",
+    "ALLOWED_ORIGINS": "https://g2ppoint.web.app",
   },
   "d1_databases": [
     {
