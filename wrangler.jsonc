@@ -3,7 +3,7 @@
   "main": "worker.mjs",
   "compatibility_date": "2025-01-01",
   "vars": {
-    "ALLOWED_ORIGINS": "https://VOTRE-SITE.web.app"
+    "ALLOWED_ORIGINS": "https://g2point-api.irintsoachandroh.workers.dev",
   },
   "d1_databases": [
     {
