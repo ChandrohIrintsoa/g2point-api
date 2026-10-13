@@ -1,0 +1,246 @@
+/* FICHIER GÉNÉRÉ — ne pas modifier à la main (node cloudflare/build-single.js) */
+/* ===== Moteur ===== */
+/* Moteur de règles pur (sans DOM) : utilisé par app.js et par les tests Node. */
+(function(root){
+const N4=[[1,0],[-1,0],[0,1],[0,-1]],N8=[...N4,[1,1],[1,-1],[-1,1],[-1,-1]];
+const grid=(W,H,v)=>Array.from({length:H},()=>Array(W).fill(v));
+const tmOf=(tm,p)=>tm?p%2:p;
+const CAND_RADIUS=2;      /* l'IA n'envisage que les cases à ≤2 d'un point existant */
+const MIN_LINK=2;         /* un point ne peut fermer une boucle que s'il touche ≥2 de mes points vivants */
+const HARD_TOP=5,HARD_REPLY=.8; /* niveau difficile : réponses adverses examinées sur les 5 meilleurs coups */
+const LEVELS=[{name:'Facile',noise:4,block:.3,book:false,deep:false},{name:'Normal',noise:.3,block:1,book:true,deep:false},{name:'Difficile',noise:.05,block:1,book:true,deep:true}];
+function create(w,h,n,tm){const K=tm?2:n;return{n:0,w,h,N:n,tm:!!tm,o:grid(w,h,0),d:grid(w,h,false),sc:Array(K).fill(0),big:Array(K).fill(0),combo:0,loops:[],cur:0,bonus:false,cap:[],capT:0,blk:grid(w,h,false),free:w*h}}
+/* Case jouable : dans le terrain, vide, et hors territoire confiné (zone fermée où une capture a eu lieu) */
+const legal=(s,x,y)=>x>=0&&y>=0&&x<s.w&&y<s.h&&!s.o[y][x]&&!s.blk[y][x];
+/* Territoire : une zone fermée qui a capturé devient inaccessible pour tous. */
+function mark(s,c){for(const [a,b] of c.cells)if(!s.blk[b][a]){s.blk[b][a]=true;if(!s.o[b][a])s.free--}}
+/* Zones fermées par l'équipe t : composantes de cases non atteignables depuis le bord.
+   Si `at` est fourni, on s'arrête dès que la composante contenant `at` est trouvée (early-exit). */
+function scan(s,t,at){
+  const W=s.w,H=s.h,{o,d}=s,wall=(a,b)=>o[b][a]==t+1&&!d[b][a],seen=grid(W,H,false),st=[];
+  const push=(a,b)=>{if(!seen[b][a]&&!wall(a,b)){seen[b][a]=true;st.push([a,b])}};
+  for(let a=0;a<W;a++){push(a,0);push(a,H-1)}
+  for(let b=0;b<H;b++){push(0,b);push(W-1,b)}
+  while(st.length){const [a,b]=st.pop();for(const [dx,dy] of N4){const u=a+dx,v=b+dy;if(u>=0&&v>=0&&u<W&&v<H)push(u,v)}}
+  const vis=grid(W,H,false);
+  const grow=(a,b)=>{
+    const cells=[],bd=new Set(),q=[[a,b]];vis[b][a]=true;
+    while(q.length){
+      const [i,j]=q.pop();cells.push([i,j]);
+      for(const [dx,dy] of N8){
+        const u=i+dx,v=j+dy;if(u<0||v<0||u>=W||v>=H)continue;
+        if(wall(u,v))bd.add(v*W+u);
+        else if(dx*dy==0&&!seen[v][u]&&!vis[v][u]){vis[v][u]=true;q.push([u,v])}
+      }
+    }
+    return{cells,bd};
+  };
+  if(at){const [x,y]=at;return seen[y][x]||wall(x,y)?[]:[grow(x,y)]}
+  const comps=[];
+  for(let b=0;b<H;b++)for(let a=0;a<W;a++){
+    if(seen[b][a]||wall(a,b)||vis[b][a])continue;
+    comps.push(grow(a,b));
+  }
+  return comps;
+}
+/* Nombre de points vivants de l'équipe t dans les 8 cases voisines */
+function links(s,x,y,t){let k=0;for(const [dx,dy] of N8){const u=x+dx,v=y+dy;if(u>=0&&v>=0&&u<s.w&&v<s.h&&s.o[v][u]==t+1&&!s.d[v][u])k++}return k}
+/* Joue un coup. Retourne false (sans rien modifier) si le coup est illégal, y compris dans un territoire confiné. */
+function apply(s,[x,y]){
+  if(!legal(s,x,y))return false;
+  const K=s.tm?2:s.N,t=tmOf(s.tm,s.cur);s.o[y][x]=t+1;s.free--;let g=0;s.cap=[];s.capT=t;
+  /* Un point relié à moins de 2 de mes points ne peut pas fermer de boucle : on évite le scan complet */
+  if(links(s,x,y,t)>=MIN_LINK)for(const c of scan(s,t)){
+    const vic=c.cells.filter(([a,b])=>s.o[b][a]&&s.o[b][a]!=t+1&&!s.d[b][a]);
+    if(vic.length){vic.forEach(([a,b])=>s.d[b][a]=true);s.sc[t]+=vic.length;g+=vic.length;s.loops.push({t,c});mark(s,c);s.cap.push(...vic)}
+  }
+  if(g&&g>s.big[t])s.big[t]=g;
+  if(!g)for(let u=0;u<K;u++){ /* piège : point posé dans une zone déjà fermée par un adversaire */
+    if(u==t)continue;
+    const c=scan(s,u,[x,y])[0]; /* early-exit : seule la composante du point nous intéresse */
+    if(c){s.d[y][x]=true;s.sc[u]++;if(!s.big[u])s.big[u]=1;s.loops.push({t:u,c});mark(s,c);s.cap=[[x,y]];s.capT=u;break}
+  }
+  s.bonus=g>0;s.combo=s.bonus?s.combo+1:0;if(!s.bonus)s.cur=(s.cur+1)%s.N; /* capture = le même joueur rejoue */
+  return true;
+}
+const clone=s=>({...s,o:s.o.map(r=>r.slice()),d:s.d.map(r=>r.slice()),blk:s.blk.map(r=>r.slice()),sc:s.sc.slice(),big:s.big.slice(),loops:[],cap:[]});
+const rng=a=>()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}; /* mulberry32 */
+
+/* ---- IA : évaluation + mémoire de motifs apprise des parties ---- */
+// Poids : [gain de capture, perte/piège, blocage d'une capture adverse, voisins à moi, voisins adverses, motif appris]
+const DEFAULT_W=[10,10,7,.4,.2,2];
+const mutate=(w,r)=>w.map(x=>Math.max(0,+(x*(.7+r()*.6)).toFixed(3)));
+/* Motif local (8 voisins) vu du joueur t : . vide, m à moi, o adverse, x capturé, b territoire, # bord */
+function patKey(s,x,y,t){
+  let k='';
+  for(const [dx,dy] of N8){
+    const u=x+dx,v=y+dy;
+    if(u<0||v<0||u>=s.w||v>=s.h){k+='#';continue}
+    const p=s.o[v][u];
+    k+=!p?(s.blk[v][u]?'b':'.'):s.d[v][u]?'x':p==t+1?'m':'o';
+  }
+  return k;
+}
+/* Rejoue une partie et enregistre, pour chaque coup, [fois joué, gain cumulé, victoires du joueur] */
+function learn(book,mv,w,h,n,tm,win){
+  const s=create(w,h,n,tm);
+  for(const m of mv){
+    const t=tmOf(tm,s.cur),k=patKey(s,m[0],m[1],t);
+    if(!apply(s,m))continue;
+    const gain=s.capT==t?s.cap.length:-s.cap.length,e=book[k]||(book[k]=[0,0,0]);
+    e[0]++;e[1]+=gain;if(win.includes(t))e[2]++;
+  }
+}
+/* Cases candidates : vides, hors territoire confiné, proches d'un point existant */
+function cands(s){
+  const W=s.w,H=s.h,out=[];let any=false;
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    if(s.o[y][x]){any=true;continue}
+    if(s.blk[y][x])continue;
+    let near=false;
+    for(let j=-CAND_RADIUS;j<=CAND_RADIUS&&!near;j++)for(let i=-CAND_RADIUS;i<=CAND_RADIUS;i++){const a=x+i,b=y+j;if(a>=0&&b>=0&&a<W&&b<H&&s.o[b][a]){near=true;break}}
+    if(near)out.push([x,y]);
+  }
+  return{any,list:out};
+}
+/* Meilleur gain adverse possible après mon coup (niveau difficile) */
+function replyGain(s,opp){
+  const {list}=cands(s);let m=0;
+  for(const [x,y] of list){const c=clone(s);if(!apply(c,[x,y]))continue;const g=c.sc[opp]-s.sc[opp];if(g>m)m=g}
+  return m;
+}
+function aiMove(s,rnd=Math.random,P){
+  const W=s.w,H=s.h,t=tmOf(s.tm,s.cur),opp=1-t,w=(P&&P.w)||DEFAULT_W,book=P&&P.book,L=LEVELS[(P&&P.lvl!=null)?P.lvl:1]||LEVELS[1];
+  const {any,list:c0}=cands(s),Z=P&&P.zone,cand=Z?c0.filter(([x,y])=>x>=Z[0]&&x<=Z[1]&&y>=Z[2]&&y<=Z[3]):c0; /* zone optionnelle : jeu compact (puzzles) */
+  if(!any){const c=[W>>1,H>>1];return legal(s,c[0],c[1])?c:null}
+  if(!cand.length){for(let y=0;y<H;y++)for(let x=0;x<W;x++)if(legal(s,x,y)&&(!Z||(x>=Z[0]&&x<=Z[1]&&y>=Z[2]&&y<=Z[3])))return[x,y];return null}
+  const scored=[];
+  for(const [x,y] of cand){
+    const a=clone(s);apply(a,[x,y]);
+    let v=(a.sc[t]-s.sc[t])*w[0]-(a.sc[opp]-s.sc[opp])*w[1];
+    const b=clone(s);b.cur=opp;apply(b,[x,y]);v+=(b.sc[opp]-s.sc[opp])*w[2]*L.block; /* case où l'adversaire capturerait */
+    for(const [dx,dy] of N8){const u=x+dx,q=y+dy;if(u<0||q<0||u>=W||q>=H)continue;const p=s.o[q][u];if(p==t+1)v+=w[3];else if(p)v+=w[4]}
+    const e=L.book&&book&&book[patKey(s,x,y,t)];
+    if(e)v+=w[5]*Math.max(-2,Math.min(3,(e[1]*1.5+e[2]*.8)/(e[0]+2))); /* techniques vues dans les parties */
+    v+=rnd()*L.noise;scored.push({m:[x,y],v,cap:a.bonus});
+  }
+  scored.sort((p,q)=>q.v-p.v);
+  if(L.deep){ /* difficile : on regarde la meilleure réponse adverse pour les meilleurs coups */
+    for(const c of scored.slice(0,HARD_TOP)){
+      if(c.cap)continue; /* je rejoue après une capture : pas de réponse immédiate */
+      const a=clone(s);apply(a,c.m);c.v-=replyGain(a,opp)*w[1]*HARD_REPLY;
+    }
+    scored.sort((p,q)=>q.v-p.v);
+  }
+  return scored[0].m;
+}
+/* Puzzle généré par l'IA : parties IA (Rouge niveau normal) contre IA faible (Bleu), on garde une position où Rouge
+   a UN SEUL coup qui capture >= goal points. La difficulté (goal, nombre de pierres) croît avec l'intelligence de l'IA. */
+const ZONE=[2,8,3,11]; /* zone centrale où se joue le puzzle */
+const puzzleSpec=intel=>({goal:Math.min(4,1+Math.floor(intel/3)),minMoves:12+intel*2});
+function genPuzzle(rnd=Math.random,intel=0,P,maxMs=1500){
+  const {goal,minMoves}=puzzleSpec(intel),t0=Date.now();
+  while(Date.now()-t0<maxMs){
+    const s=create(11,15,2,false),mv=[];
+    while(s.free>0&&mv.length<60&&Date.now()-t0<maxMs){
+      let m=aiMove(s,rnd,{w:P&&P.w,book:P&&P.book,lvl:s.cur?0:1,zone:ZONE});if(!m)break;
+      if(!s.cur){ /* Rouge construit sa chaîne mais ne conclut jamais : la capture reste à trouver */
+        const t=clone(s);apply(t,m);
+        if(t.sc[0]>s.sc[0]){const alt=cands(s).list.filter(([x,y])=>x>=ZONE[0]&&x<=ZONE[1]&&y>=ZONE[2]&&y<=ZONE[3]&&(()=>{const c=clone(s);apply(c,[x,y]);return c.sc[0]==s.sc[0]})());if(alt.length)m=alt[(rnd()*alt.length)|0]}
+      }
+      apply(s,m);mv.push(m);
+      if(s.cur!==0||s.bonus||mv.length<minMoves)continue;
+      const sol=[];
+      for(let y=0;y<s.h&&sol.length<2;y++)for(let x=0;x<s.w;x++){
+        if(!legal(s,x,y))continue;const c=clone(s);apply(c,[x,y]);if(c.sc[0]-s.sc[0]>=goal)sol.push([x,y]);
+      }
+      if(sol.length===1)return{name:'Puzzle IA',goal,intel,moves:mv.slice(),sol:sol[0],hint:'Un seul coup capture '+goal+' point'+(goal>1?'s':'')+' : trouvez-le.'};
+    }
+  }
+  return null;
+}
+const api={genPuzzle,puzzleSpec,create,scan,apply,legal,links,tmOf,grid,clone,rng,aiMove,learn,patKey,mutate,DEFAULT_W,LEVELS};
+if(false)module.exports=api;else root.G2Engine=api;
+})(typeof window!=='undefined'?window:globalThis);
+
+/* ===== Worker ===== */
+/* API G2Point (Cloudflare Worker + D1).
+   - POST /api/archive : enregistre une partie terminée APRÈS l'avoir rejouée avec le moteur (aucune confiance au client),
+                         puis fait apprendre l'IA partagée à partir de ses coups.
+   - GET  /api/ai      : renvoie la mémoire partagée de l'IA (motifs + nombre de parties apprises).
+   Le même moteur que le jeu est utilisé (public/js/engine.js), donc règles et zones confinées identiques. */
+const E=globalThis.G2Engine;
+
+const SIZES=new Set(['11x15','17x23','23x31']),MAX_BODY=96*1024,MIN_MOVES=6,MAX_PER_HOUR_IP=40,MAX_PER_HOUR_PLAYER=20,
+  BOOK_MAX=1500,BOOK_KEEP=1200,MODES=new Set(['local','ai','daily','online']),RESULTS=new Set(['win','loss','draw','na']);
+const ID_RE=/^[A-Za-z0-9_-]{6,64}$/;
+
+const cors=(req,env)=>{
+  const o=req.headers.get('Origin')||'',ok=(env.ALLOWED_ORIGINS||'').split(',').map(s=>s.trim()).filter(Boolean);
+  return ok.includes(o)?{'Access-Control-Allow-Origin':o,'Vary':'Origin','Access-Control-Allow-Methods':'GET,POST,OPTIONS','Access-Control-Allow-Headers':'Content-Type','Access-Control-Max-Age':'86400'}:null;
+};
+const json=(data,status,h)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store',...h}});
+
+async function sha(txt){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(txt));return[...new Uint8Array(b)].slice(0,12).map(x=>x.toString(16).padStart(2,'0')).join('')}
+
+/* Rejoue la partie : renvoie null si un coup est illégal (hors terrain, case occupée, territoire confiné). */
+export function validate(b){
+  if(!b||typeof b!=='object')return null;
+  const {gameId,playerId,w,h,n,tm,mode,result,moves}=b;
+  if(!ID_RE.test(gameId||'')||!ID_RE.test(playerId||''))return null;
+  if(!SIZES.has(w+'x'+h)||![2,3,4].includes(n)||(tm&&n!==4))return null;
+  if(!MODES.has(mode)||!RESULTS.has(result))return null;
+  if(!Array.isArray(moves)||moves.length<MIN_MOVES||moves.length>w*h)return null;
+  const s=E.create(w,h,n,!!tm),mv=[];
+  for(const m of moves){
+    if(!Array.isArray(m)||m.length!==2||!Number.isInteger(m[0])||!Number.isInteger(m[1]))return null;
+    if(!E.apply(s,m))return null;mv.push([m[0],m[1]]);
+  }
+  const mx=Math.max(...s.sc),win=s.sc.map((v,i)=>v===mx?i:-1).filter(i=>i>=0);
+  return{gameId,playerId,w,h,n,tm:!!tm,mode,result,mv,win:mx>0?win:[],sc:s.sc};
+}
+
+const getStat=async(db,k)=>{const r=await db.prepare('SELECT statistic_value v FROM game_statistics WHERE statistic_key=?').bind(k).first();return r?r.v:null};
+const setStat=(db,k,v)=>db.prepare('INSERT INTO game_statistics(statistic_key,statistic_value,updated_at) VALUES(?,?,unixepoch()) ON CONFLICT(statistic_key) DO UPDATE SET statistic_value=excluded.statistic_value,updated_at=unixepoch()').bind(k,v);
+
+function trim(book){
+  const ks=Object.keys(book);if(ks.length<=BOOK_MAX)return book;
+  ks.sort((a,b)=>book[b][0]-book[a][0]);const nb={};ks.slice(0,BOOK_KEEP).forEach(k=>nb[k]=book[k]);return nb;
+}
+
+export async function handleArchive(req,env,h){
+  const raw=await req.text();if(raw.length>MAX_BODY)return json({error:'trop gros'},413,h);
+  let body;try{body=JSON.parse(raw)}catch(e){return json({error:'json invalide'},400,h)}
+  const g=validate(body);if(!g)return json({error:'partie invalide'},422,h);
+  const db=env.DB,ip=await sha((env.IP_SALT||'')+(req.headers.get('CF-Connecting-IP')||'?')),since="unixepoch()-3600";
+  const c1=await db.prepare('SELECT COUNT(*) c FROM game_archives WHERE ip_hash=? AND created_at>'+since).bind(ip).first();
+  const c2=await db.prepare('SELECT COUNT(*) c FROM game_archives WHERE player_id=? AND created_at>'+since).bind(g.playerId).first();
+  if(c1.c>=MAX_PER_HOUR_IP||c2.c>=MAX_PER_HOUR_PLAYER)return json({error:'trop de parties, réessayez plus tard'},429,h);
+  const ins=await db.prepare('INSERT OR IGNORE INTO game_archives(game_id,player_id,result,moves_json,width,height,players,team,mode,ip_hash) VALUES(?,?,?,?,?,?,?,?,?,?)')
+    .bind(g.gameId,g.playerId,g.result,JSON.stringify(g.mv),g.w,g.h,g.n,g.tm?1:0,g.mode,ip).run();
+  if(!ins.meta||!ins.meta.changes)return json({ok:true,duplicate:true},200,h); /* déjà reçue : on n'apprend pas deux fois */
+  /* apprentissage partagé : lecture-fusion-écriture (une perte occasionnelle en cas d'envois simultanés est sans gravité) */
+  let book={};try{book=JSON.parse(await getStat(db,'ai_book')||'{}')}catch(e){}
+  E.learn(book,g.mv,g.w,g.h,g.n,g.tm,g.win);book=trim(book);
+  const games=(+await getStat(db,'ai_games')||0)+1;
+  await db.batch([setStat(db,'ai_book',JSON.stringify(book)),setStat(db,'ai_games',String(games))]);
+  return json({ok:true,games},200,h);
+}
+
+export async function handleAi(env,h){
+  const db=env.DB;let book={};try{book=JSON.parse(await getStat(db,'ai_book')||'{}')}catch(e){}
+  return json({book,games:+await getStat(db,'ai_games')||0},200,{...h,'Cache-Control':'public, max-age=60'});
+}
+
+export default{
+  async fetch(req,env){
+    const url=new URL(req.url),h=cors(req,env);
+    if(req.method==='OPTIONS')return new Response(null,{status:h?204:403,headers:h||{}});
+    if(!h)return json({error:'origine non autorisée'},403,{});
+    try{
+      if(url.pathname==='/api/archive'&&req.method==='POST')return await handleArchive(req,env,h);
+      if(url.pathname==='/api/ai'&&req.method==='GET')return await handleAi(env,h);
+      return json({error:'introuvable'},404,h);
+    }catch(e){return json({error:'erreur serveur'},500,h)}
+  }
+};
