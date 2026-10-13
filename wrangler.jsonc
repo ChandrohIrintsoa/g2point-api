@@ -3,13 +3,13 @@
   "main": "worker.mjs",
   "compatibility_date": "2025-01-01",
   "vars": {
-    "ALLOWED_ORIGINS": "https://g2point-api.irintsoachandroh.workers.dev",
+    "ALLOWED_ORIGINS": "https://g2ppoint.web.app/",
   },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "g2point",
-      "database_id": "COLLEZ-ICI-LID-DE-LA-BASE-D1"
+      "database_id": "25e5daa7-dccc-4142-a001-d720f022c5f0"
     }
   ]
 }
